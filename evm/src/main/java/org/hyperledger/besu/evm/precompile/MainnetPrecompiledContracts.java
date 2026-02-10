@@ -46,6 +46,13 @@ public interface MainnetPrecompiledContracts {
     registry.put(Address.SHA256, new SHA256PrecompiledContract(gasCalculator));
     registry.put(Address.RIPEMD160, new RIPEMD160PrecompiledContract(gasCalculator));
     registry.put(Address.ID, new IDPrecompiledContract(gasCalculator));
+    // stateful precompile activate at frontier
+    registry.put(Address.NATIVE_MINTER, new NativeMinterPrecompiledContract(gasCalculator));
+    registry.put(Address.ADDRESS_REGISTRY, new AddressRegistryPrecompiledContract(gasCalculator));
+    registry.put(Address.GASPRICE, new GasPricePrecompiledContract(gasCalculator));
+    registry.put(Address.REVENUE_RATIO, new RevenueRatioPrecompiledContract(gasCalculator));
+    registry.put(Address.TREASURY_REGISTRY, new TreasuryRegistryPrecompiledContract(gasCalculator));
+    registry.put(Address.GASFEE_GRANT, new GasFeeGrantPrecompiledContract(gasCalculator));
   }
 
   /**

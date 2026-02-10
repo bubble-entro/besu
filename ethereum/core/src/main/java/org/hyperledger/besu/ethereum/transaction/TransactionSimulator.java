@@ -314,6 +314,7 @@ public class TransactionSimulator {
               Optional.empty()));
 
     } catch (final Exception e) {
+      LOG.error("TransactionSimulator.process failed", e);
       return Optional.empty();
     }
   }

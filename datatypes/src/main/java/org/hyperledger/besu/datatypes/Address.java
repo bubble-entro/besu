@@ -88,6 +88,30 @@ public class Address extends BytesHolder {
   /** The constant BLS12_MAP_FP2_TO_G2. */
   public static final Address BLS12_MAP_FP2_TO_G2 = Address.precompiled(0x11);
 
+  /** The constant NATIVE_MINTER. */
+  public static final Address NATIVE_MINTER =
+      Address.fromHexString("0x0000000000000000000000000000000000001001");
+
+  /** The constant ADDRESS_REGISTRY. */
+  public static final Address ADDRESS_REGISTRY =
+      Address.fromHexString("0x0000000000000000000000000000000000001002");
+
+  /** The constant GASPRICE. */
+  public static final Address GASPRICE =
+      Address.fromHexString("0x0000000000000000000000000000000000001003");
+
+  /** The constant REVENUE_RATIO */
+  public static final Address REVENUE_RATIO =
+      Address.fromHexString("0x0000000000000000000000000000000000001004");
+
+  /** The constant TREASURY_REGISTRY */
+  public static final Address TREASURY_REGISTRY =
+      Address.fromHexString("0x0000000000000000000000000000000000001005");
+
+  /** The constant GASFEE_GRANT */
+  public static final Address GASFEE_GRANT =
+      Address.fromHexString("0x0000000000000000000000000000000000001006");
+
   /** Precompile address for P256_VERIFY. */
   public static final Address P256_VERIFY = Address.precompiled(0x0100);
 

@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.mainnet;
 
+import static org.hyperledger.besu.crypto.Hash.keccak256;
 import static org.hyperledger.besu.evm.internal.Words.clampedAdd;
 import static org.hyperledger.besu.evm.worldstate.CodeDelegationHelper.getTarget;
 import static org.hyperledger.besu.evm.worldstate.CodeDelegationHelper.hasCodeDelegation;
@@ -55,12 +56,21 @@ import com.google.common.collect.HashMultimap;
 import com.google.common.collect.Multimap;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
+import org.apache.tuweni.units.bigints.UInt256;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class MainnetTransactionProcessor {
 
   private static final Logger LOG = LoggerFactory.getLogger(MainnetTransactionProcessor.class);
+
+  private static final Bytes FALSE =
+      Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000");
+
+  private static final UInt256 FEE_GRANT_FLAG_STORAGE =
+      UInt256.fromHexString("0x330bb6449068d17e3815a045685a05a106741a6e960986b3c72eb86cb692da00");
+
+  private static final UInt256 PRECOMPILE_STORAGE_SLOT = UInt256.valueOf(2L);
 
   private static final Set<Address> EMPTY_ADDRESS_SET = Set.of();
 
@@ -228,6 +238,77 @@ public class MainnetTransactionProcessor {
         return TransactionProcessingResult.invalid(validationResult);
       }
 
+      Wei spendLimit = Wei.ZERO;
+      Wei periodLimit = Wei.ZERO;
+      Wei periodCanSpend = Wei.ZERO;
+      UInt256 periodReset = UInt256.ZERO;
+      UInt256 latestTransaction = UInt256.ZERO;
+      UInt256 rootStorageSlot = UInt256.ZERO;
+      UInt256 period = UInt256.ZERO;
+      Address granterAddress = Address.ZERO;
+      MutableAccount granter = worldState.getOrCreate(Address.ZERO);
+      boolean isPeriodic = false;
+
+      final boolean isGranted =
+          !sender.getStorageValue(FEE_GRANT_FLAG_STORAGE).isZero()
+              && (sender.getBalance()).isZero();
+      final MutableAccount feeGrant = worldState.getOrCreate(Address.GASFEE_GRANT);
+      // Check is the transaction send from granted account.
+      if (isGranted) {
+        final UInt256 rootSlotForAll = getRootSlotOfGasFeeGrant(senderAddress, Address.ZERO);
+
+        Address to = Address.ZERO;
+        if (transaction.getTo().isPresent()) {
+          to = transaction.getTo().get();
+        }
+        final UInt256 rootSlotForProgram = getRootSlotOfGasFeeGrant(senderAddress, to);
+
+        final UInt256 allowanceForAll = feeGrant.getStorageValue(rootSlotForAll.add(1L));
+        final UInt256 allowanceForProgram = feeGrant.getStorageValue(rootSlotForProgram.add(1L));
+        final UInt256 allowance =
+            !allowanceForAll.isZero()
+                ? allowanceForAll
+                : !allowanceForProgram.isZero() ? allowanceForProgram : UInt256.ZERO;
+        final UInt256 blockNumber = UInt256.valueOf(blockHeader.getNumber());
+        if (!allowance.isZero()) {
+          rootStorageSlot =
+              !allowanceForAll.isZero()
+                  ? rootSlotForAll
+                  : !allowanceForProgram.isZero() ? rootSlotForProgram : UInt256.ZERO;
+          final UInt256 endTime = feeGrant.getStorageValue(rootStorageSlot.add(6L));
+          // Check if the granted is expired or not.
+          if (!endTime.isZero() && blockNumber.compareTo(endTime) > 0) {
+            LOG.debug("Invalid fee grant transaction expired");
+            return TransactionProcessingResult.invalid(
+                ValidationResult.invalid(
+                    TransactionInvalidReason.INVALID_TRANSACTION_FORMAT,
+                    String.format("fee grant expired at %s", endTime.toQuantityHexString())));
+          } else {
+            granterAddress = Address.wrap(feeGrant.getStorageValue(rootStorageSlot).slice(12, 20));
+            spendLimit = Wei.of((feeGrant.getStorageValue(rootStorageSlot.add(2L))));
+            // Check is allowance type is periodic.
+            if (feeGrant.getStorageValue((rootStorageSlot.add(1L))).equals(UInt256.valueOf(2L))) {
+              // Get period can spend value.
+              periodReset = feeGrant.getStorageValue(rootStorageSlot.add(5L));
+              latestTransaction = feeGrant.getStorageValue(rootStorageSlot.add(7L));
+              period = feeGrant.getStorageValue(rootStorageSlot.add(8L));
+              final UInt256 cycles = (blockNumber.subtract(periodReset)).divide(period);
+              if (!cycles.isZero()) {
+                periodReset = periodReset.add(cycles.multiply(period));
+              }
+              if (latestTransaction.add(period).compareTo(periodReset) < 0) {
+                periodLimit = Wei.of(feeGrant.getStorageValue(rootStorageSlot.add(3L)));
+                periodCanSpend = periodLimit;
+              } else {
+                periodCanSpend = Wei.of(feeGrant.getStorageValue(rootStorageSlot.add(4L)));
+              }
+              isPeriodic = true;
+            }
+          }
+          granter = worldState.getOrCreate(granterAddress);
+        }
+      }
+
       operationTracer.tracePrepareTransaction(worldState, transaction);
 
       final Set<Address> eip2930WarmAddressList = new HashSet<>(Address.SIZE);
@@ -246,19 +327,48 @@ public class MainnetTransactionProcessor {
 
       final Wei upfrontGasCost =
           transaction.getUpfrontGasCost(transactionGasPrice, blobGasPrice, blobGas);
-      try {
-        final Wei previousBalance = sender.decrementBalance(upfrontGasCost);
+
+      if (isGranted) {
+        if (upfrontGasCost.compareTo(granter.getBalance()) > 0
+            || upfrontGasCost.compareTo(spendLimit) > 0
+            || (isPeriodic && upfrontGasCost.compareTo(periodCanSpend) > 0)) {
+          LOG.debug("Invalid fee grant transaction up-front cost exceeds allowance");
+          return TransactionProcessingResult.invalid(
+              ValidationResult.invalid(
+                  TransactionInvalidReason.UPFRONT_COST_EXCEEDS_BALANCE,
+                  String.format(
+                      "transaction up-front cost %s exceeds transaction granter account balance %s",
+                      upfrontGasCost.toQuantityHexString(),
+                      granter.getBalance().toQuantityHexString())));
+        }
+      }
+
+      Wei previousBalance;
+      if (isGranted) {
+        // deducted balance from granter account.
+        previousBalance = granter.decrementBalance(upfrontGasCost);
+
         LOG.trace(
-            "Deducted sender {} upfront gas cost {} ({} -> {})",
-            senderAddress,
+            "Deducted granter {} upfront gas cost {} ({} -> {})",
+            granterAddress,
             upfrontGasCost,
             previousBalance,
-            sender.getBalance());
-      } catch (final IllegalStateException ise) {
-        if (transactionValidationParams.allowUnderpriced()) {
-          LOG.trace("Allowing account balance underflow as requested");
-        } else {
-          throw ise;
+            granter.getBalance());
+      } else {
+        try {
+          previousBalance = sender.decrementBalance(upfrontGasCost);
+          LOG.trace(
+              "Deducted sender {} upfront gas cost {} ({} -> {})",
+              senderAddress,
+              upfrontGasCost,
+              previousBalance,
+              sender.getBalance());
+        } catch (final IllegalStateException ise) {
+          if (transactionValidationParams.allowUnderpriced()) {
+            LOG.trace("Allowing account balance underflow as requested");
+          } else {
+            throw ise;
+          }
         }
       }
 
@@ -407,15 +517,31 @@ public class MainnetTransactionProcessor {
       final long refundedGas =
           gasCalculator.calculateGasRefund(transaction, initialFrame, codeDelegationRefund);
       final Wei refundedWei = transactionGasPrice.multiply(refundedGas);
-      final Wei balancePriorToRefund = sender.getBalance();
-      sender.incrementBalance(refundedWei);
-      LOG.atTrace()
-          .setMessage("refunded sender {}  {} wei ({} -> {})")
-          .addArgument(senderAddress)
-          .addArgument(refundedWei)
-          .addArgument(balancePriorToRefund)
-          .addArgument(sender.getBalance())
-          .log();
+
+      // Refund the granter if the transaction is fee grant transaction.
+      Wei balancePriorToRefund;
+      if (isGranted) {
+        balancePriorToRefund = granter.getBalance();
+        granter.incrementBalance(refundedWei);
+        LOG.atTrace()
+            .setMessage("refunded granter {}  {} wei ({} -> {})")
+            .addArgument(granterAddress)
+            .addArgument(refundedWei)
+            .addArgument(balancePriorToRefund)
+            .addArgument(sender.getBalance())
+            .log();
+      } else {
+        balancePriorToRefund = sender.getBalance();
+        sender.incrementBalance(refundedWei);
+        LOG.atTrace()
+            .setMessage("refunded sender {}  {} wei ({} -> {})")
+            .addArgument(senderAddress)
+            .addArgument(refundedWei)
+            .addArgument(balancePriorToRefund)
+            .addArgument(sender.getBalance())
+            .log();
+      }
+
       final long gasUsedByTransaction = transaction.getGasLimit() - initialFrame.getRemainingGas();
 
       // update the coinbase
@@ -454,12 +580,85 @@ public class MainnetTransactionProcessor {
 
       operationTracer.traceBeforeRewardTransaction(worldUpdater, transaction, coinbaseWeiDelta);
 
-      // EIP-158 & EIP-7928: coinbase is considered "touched" even when fees are zero.
-      // Touching ensures an *empty* coinbase can be deleted during state clearing.
-      final MutableAccount coinbase = worldState.getOrCreate(miningBeneficiary);
-      accessLocationTracker.ifPresent(t -> t.addTouchedAccount(miningBeneficiary));
-      if (!coinbaseWeiDelta.isZero()) {
-        coinbase.incrementBalance(coinbaseWeiDelta);
+      final Bytes revenueRatioStatus = getStorageAtFromRevenueRatio(worldUpdater, 2L);
+
+      if (!coinbaseWeiDelta.isZero() || !clearEmptyAccounts) {
+        final var coinbase = worldState.getOrCreate(miningBeneficiary);
+        accessLocationTracker.ifPresent(t -> t.addTouchedAccount(miningBeneficiary));
+        if (revenueRatioStatus.equals(FALSE)) {
+          coinbase.incrementBalance(coinbaseWeiDelta);
+        } else {
+          final Address providerAddress = getProviderOf(worldUpdater, senderAddress);
+          final var provider = worldState.getOrCreate(providerAddress);
+          final var treasury = worldState.getOrCreate(getTreasuryAddress(worldUpdater));
+          if (!initialFrame.getInputData().isEmpty() && !transaction.isContractCreation()) {
+            final Address contractProviderAddress =
+                getProviderOf(worldUpdater, transaction.getTo().get());
+            final var contractProvider = worldState.getOrCreate(contractProviderAddress);
+            Wei feeForContract =
+                coinbaseWeiDelta
+                    .multiply(Wei.wrap(getStorageAtFromRevenueRatio(worldUpdater, 3L)))
+                    .divide(100L);
+            Wei feeForProvider =
+                coinbaseWeiDelta
+                    .multiply(Wei.wrap(getStorageAtFromRevenueRatio(worldUpdater, 4L)))
+                    .divide(100L);
+            final Wei feeForTreasury =
+                coinbaseWeiDelta
+                    .multiply(Wei.wrap(getStorageAtFromRevenueRatio(worldUpdater, 5L)))
+                    .divide(100L);
+            if (contractProviderAddress.equals(Address.ZERO)) {
+              feeForContract = Wei.ZERO;
+            }
+            if (providerAddress.equals(Address.ZERO)) {
+              feeForProvider = Wei.ZERO;
+            }
+            if (!feeForContract.isZero()) {
+              contractProvider.incrementBalance(feeForContract);
+              LOG.debug(
+                  "Transaction fee distribute to contract provider at {}: {} wei",
+                  contractProviderAddress,
+                  feeForContract);
+            }
+            if (!feeForProvider.isZero()) {
+              provider.incrementBalance(feeForProvider);
+              LOG.debug(
+                  "Transaction fee distribute to provider at {}: {} wei", providerAddress, feeForProvider);
+            }
+            final Wei feeForCoinbase =
+                coinbaseWeiDelta
+                    .subtract(feeForContract)
+                    .subtract(feeForTreasury)
+                    .subtract(feeForProvider);
+            treasury.incrementBalance(feeForTreasury);
+            coinbase.incrementBalance(feeForCoinbase);
+            LOG.debug(
+                "Transaction fee distribute to treasury at {}: {} wei", treasury.getAddress(), feeForTreasury);
+            LOG.debug(
+                "Transaction fee distribute to coinbase {}: {} wei", coinbase.getAddress(), feeForCoinbase);
+          } else {
+            final Wei fee = coinbaseWeiDelta.divide(2L);
+            coinbase.incrementBalance(fee);
+            treasury.incrementBalance(fee);
+            LOG.debug("Transaction fee distribute to coinbase {}: {} wei", coinbase.getAddress(), fee);
+            LOG.debug("Transaction fee distribute to treasury {}: {} wei", treasury.getAddress(), fee);
+          }
+        }
+      }
+
+      // Check if granted transaction then update latest transaction.
+      if (isGranted) {
+        if (isPeriodic) {
+          if (latestTransaction.add(period).compareTo(periodReset) < 0) {
+            periodCanSpend = periodLimit.subtract(coinbaseWeiDelta);
+          } else {
+            periodCanSpend = periodCanSpend.subtract(coinbaseWeiDelta);
+          }
+          feeGrant.setStorageValue(
+              rootStorageSlot.add(4L), UInt256.fromHexString(periodCanSpend.toHexString()));
+          feeGrant.setStorageValue(
+              rootStorageSlot.add(7L), UInt256.valueOf(blockHeader.getNumber()));
+        }
       }
 
       operationTracer.traceEndTransaction(
@@ -584,6 +783,29 @@ public class MainnetTransactionProcessor {
     }
 
     return builder.toString();
+  }
+
+  private Address getProviderOf(final WorldUpdater worldUpdater, final Address address) {
+    final MutableAccount addressRegistry = worldUpdater.getOrCreate(Address.ADDRESS_REGISTRY);
+    final Bytes hash = Bytes.concatenate(PRECOMPILE_STORAGE_SLOT, address.getBytes());
+    final UInt256 slot = UInt256.fromBytes(Bytes32.leftPad(keccak256(hash)));
+    return Address.wrap(addressRegistry.getStorageValue(slot).slice(12, 20));
+  }
+
+  private Address getTreasuryAddress(final WorldUpdater worldUpdater) {
+    final MutableAccount treasuryRegistry = worldUpdater.getOrCreate(Address.TREASURY_REGISTRY);
+    return Address.wrap(treasuryRegistry.getStorageValue(PRECOMPILE_STORAGE_SLOT).slice(12, 20));
+  }
+
+  private Bytes getStorageAtFromRevenueRatio(final WorldUpdater worldUpdater, final long slot) {
+    final MutableAccount revenueRatio = worldUpdater.getOrCreate(Address.REVENUE_RATIO);
+    return revenueRatio.getStorageValue(UInt256.valueOf(slot));
+  }
+
+  private UInt256 getRootSlotOfGasFeeGrant(final Address sender, final Address program) {
+    final Bytes32 root = keccak256(Bytes.concatenate(PRECOMPILE_STORAGE_SLOT, sender.getBytes()));
+    final Bytes32 slot = keccak256(Bytes.concatenate(root, program.getBytes()));
+    return UInt256.fromBytes(slot);
   }
 
   private Code processCodeFromAccount(
