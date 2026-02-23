@@ -185,19 +185,15 @@ public class GasFeeGrantPrecompiledContractTest {
         .thenReturn(UInt256.fromBytes(padAddress(SENDER_ADDRESS)));
 
     // Create calldata that is intentionally too short (only the signature + 32 bytes)
-    // The contract expects at least 192 bytes of arguments
+    // The contract expects at least 224 bytes of arguments
     Bytes shortCalldata = Bytes.concatenate(
         SET_FEE_GRANT_SIGNATURE, 
         padAddress(GRANTEE_ADDRESS) 
     );
 
-    // This test expects a Java Exception to be thrown because of unchecked .slice() lengths
-    org.junit.jupiter.api.Assertions.assertThrows(IndexOutOfBoundsException.class, () -> {
-        contract.computePrecompile(shortCalldata, frame);
-    }, "Expected an IndexOutOfBoundsException because calldata length is not validated before slicing.");
-    
-    // HOW TO FIX IN YOUR CODE: 
-    // Add `if (calldata.size() < 192) return FALSE;` at the beginning of setFeeGrant
+    // With bound checking in place, short calldata returns FALSE instead of crashing
+    var result = contract.computePrecompile(shortCalldata, frame);
+    assertThat(result.output()).isEqualTo(FALSE);
   }
 
   // --------------------------------------------------------
@@ -265,18 +261,12 @@ public class GasFeeGrantPrecompiledContractTest {
     var result = contract.computePrecompile(calldata, frame);
     UInt256 returnedResetBlock = UInt256.fromBytes(result.output());
 
-    // Because of the bug: cycles = (100 - 200) / 50. 
-    // In UInt256, 100 - 200 underflows to an incredibly large number.
-    // The returned reset block will be wildly inaccurate instead of just staying at 200.
-    System.out.println("Underflow resulted in corrupted reset block: " + returnedResetBlock);
+    // Because of the fix: blockNumber < resetBlock will immediately return resetBlock.
+    // The returned reset block will remain at 200, avoiding underflow corruption.
+    System.out.println("Returned reset block should be 200: " + returnedResetBlock);
     
-    // This assertion PROVES the bug exists. The reset block should realistically still be 200.
-    assertThat(returnedResetBlock).isNotEqualTo(UInt256.valueOf(200L));
-
-    // HOW TO FIX IN YOUR CODE:
-    // Change periodReset logic to:
-    // if (blockNumber.compareTo(resetBlock) < 0) { return resetBlock; }
-    // final UInt256 cycles = ...
+    // This assertion PROVES the fix works! The reset block correctly stays at 200.
+    assertThat(returnedResetBlock).isEqualTo(UInt256.valueOf(200L));
   }
 
   // --------------------------------------------------------

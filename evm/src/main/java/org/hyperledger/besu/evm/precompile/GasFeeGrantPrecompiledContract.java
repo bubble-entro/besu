@@ -158,6 +158,9 @@ public class GasFeeGrantPrecompiledContract extends AbstractPrecompiledContract 
   }
 
   private Bytes isGrantedForProgram(final MutableAccount contract, final Bytes calldata) {
+    if (calldata.size() < 64) {
+      return FALSE;
+    }
     final Address granteeAddress = Address.wrap(calldata.slice(12, 20));
     final Address programAddress = Address.wrap(calldata.slice(44, 20));
     final UInt256 rootSlot = storageSlotGrant(granteeAddress, programAddress);
@@ -180,6 +183,9 @@ public class GasFeeGrantPrecompiledContract extends AbstractPrecompiledContract 
 
   private Bytes grant(
       final MutableAccount contract, final Bytes calldata, final UInt256 blockNumber) {
+    if (calldata.size() < 64) {
+      return FALSE;
+    }
     final Address granteeAddress = Address.wrap(calldata.slice(12, 20));
     final Address programAddress = Address.wrap(calldata.slice(44, 20));
     final UInt256 rootSlot = storageSlotGrant(granteeAddress, programAddress);
@@ -211,6 +217,9 @@ public class GasFeeGrantPrecompiledContract extends AbstractPrecompiledContract 
       final WorldUpdater worldUpdater,
       final Bytes calldata,
       final UInt256 blockNumber) {
+    if (calldata.size() < 224) {
+      return FALSE;
+    }
     if (onlyOwner(contract, senderAddress).isZero()) {
       return FALSE;
     } else {
@@ -338,6 +347,9 @@ public class GasFeeGrantPrecompiledContract extends AbstractPrecompiledContract 
       final UInt256 period = contract.getStorageValue(rootSlot.add(8L));
       if (period.isZero()) {
         return resetBlock;
+      }
+      if (blockNumber.compareTo(resetBlock) < 0) { 
+        return resetBlock; 
       }
       final UInt256 cycles = (blockNumber.subtract(resetBlock)).divide(period);
       if (!cycles.isZero()) {
