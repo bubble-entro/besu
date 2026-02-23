@@ -301,19 +301,8 @@ public class MainnetTransactionValidator implements TransactionValidator {
     }
 
     final boolean isGranted =
-        !(sender.getStorageValue(FEE_GRANT_FLAG_STORAGE)).isZero() && senderBalance.isZero();
-    if (isGranted) {
-      if (!(transaction.getValue()).isZero()) {
-        return ValidationResult.invalid(
-            TransactionInvalidReason.INVALID_TRANSACTION_FORMAT,
-            "transaction with value is not supported in fee grants");
-      }
-      if (transaction.isContractCreation()) {
-        return ValidationResult.invalid(
-            TransactionInvalidReason.INVALID_TRANSACTION_FORMAT,
-            "contract creation transaction is not supported in fee grants");
-      }
-    }
+        !(sender.getStorageValue(FEE_GRANT_FLAG_STORAGE)).isZero(); // && senderBalance.isZero();
+
 
     final Wei upfrontCost =
         transaction.getUpfrontCost(gasCalculator.blobGasCost(transaction.getBlobCount()));

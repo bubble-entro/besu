@@ -249,12 +249,11 @@ public class MainnetTransactionProcessor {
       MutableAccount granter = worldState.getOrCreate(Address.ZERO);
       boolean isPeriodic = false;
 
-      final boolean isGranted =
-          !sender.getStorageValue(FEE_GRANT_FLAG_STORAGE).isZero()
-              && (sender.getBalance()).isZero();
+      boolean useGrant = !sender.getStorageValue(FEE_GRANT_FLAG_STORAGE).isZero();
+      // && (sender.getBalance()).isZero();
       final MutableAccount feeGrant = worldState.getOrCreate(Address.GASFEE_GRANT);
       // Check is the transaction send from granted account.
-      if (isGranted) {
+      if (useGrant) {
         final UInt256 rootSlotForAll = getRootSlotOfGasFeeGrant(senderAddress, Address.ZERO);
 
         Address to = Address.ZERO;
@@ -278,11 +277,8 @@ public class MainnetTransactionProcessor {
           final UInt256 endTime = feeGrant.getStorageValue(rootStorageSlot.add(6L));
           // Check if the granted is expired or not.
           if (!endTime.isZero() && blockNumber.compareTo(endTime) > 0) {
-            LOG.debug("Invalid fee grant transaction expired");
-            return TransactionProcessingResult.invalid(
-                ValidationResult.invalid(
-                    TransactionInvalidReason.INVALID_TRANSACTION_FORMAT,
-                    String.format("fee grant expired at %s", endTime.toQuantityHexString())));
+            LOG.debug("Fee grant expired, falling back to sender");
+            useGrant = false;
           } else {
             granterAddress = Address.wrap(feeGrant.getStorageValue(rootStorageSlot).slice(12, 20));
             spendLimit = Wei.of((feeGrant.getStorageValue(rootStorageSlot.add(2L))));
@@ -305,7 +301,11 @@ public class MainnetTransactionProcessor {
               isPeriodic = true;
             }
           }
-          granter = worldState.getOrCreate(granterAddress);
+          if (useGrant) {
+            granter = worldState.getOrCreate(granterAddress);
+          }
+        } else {
+          useGrant = false;
         }
       }
 
@@ -328,23 +328,18 @@ public class MainnetTransactionProcessor {
       final Wei upfrontGasCost =
           transaction.getUpfrontGasCost(transactionGasPrice, blobGasPrice, blobGas);
 
-      if (isGranted) {
+      if (useGrant) {
         if (upfrontGasCost.compareTo(granter.getBalance()) > 0
             || upfrontGasCost.compareTo(spendLimit) > 0
             || (isPeriodic && upfrontGasCost.compareTo(periodCanSpend) > 0)) {
-          LOG.debug("Invalid fee grant transaction up-front cost exceeds allowance");
-          return TransactionProcessingResult.invalid(
-              ValidationResult.invalid(
-                  TransactionInvalidReason.UPFRONT_COST_EXCEEDS_BALANCE,
-                  String.format(
-                      "transaction up-front cost %s exceeds transaction granter account balance %s",
-                      upfrontGasCost.toQuantityHexString(),
-                      granter.getBalance().toQuantityHexString())));
+          LOG.debug(
+              "Fee grant up-front cost exceeds allowance, falling back to sender");
+          useGrant = false;
         }
       }
 
       Wei previousBalance;
-      if (isGranted) {
+      if (useGrant) {
         // deducted balance from granter account.
         previousBalance = granter.decrementBalance(upfrontGasCost);
 
@@ -355,6 +350,13 @@ public class MainnetTransactionProcessor {
             previousBalance,
             granter.getBalance());
       } else {
+        if (sender.getBalance().compareTo(upfrontGasCost) < 0) {
+          LOG.trace("Insufficient balance for upfront gas cost");
+          return TransactionProcessingResult.invalid(
+              ValidationResult.invalid(
+                  TransactionInvalidReason.UPFRONT_COST_EXCEEDS_BALANCE,
+                  "Sender " + senderAddress + " has insufficient balance to pay for gas"));
+        }
         try {
           previousBalance = sender.decrementBalance(upfrontGasCost);
           LOG.trace(
@@ -520,7 +522,7 @@ public class MainnetTransactionProcessor {
 
       // Refund the granter if the transaction is fee grant transaction.
       Wei balancePriorToRefund;
-      if (isGranted) {
+      if (useGrant) {
         balancePriorToRefund = granter.getBalance();
         granter.incrementBalance(refundedWei);
         LOG.atTrace()
@@ -647,7 +649,13 @@ public class MainnetTransactionProcessor {
       }
 
       // Check if granted transaction then update latest transaction.
-      if (isGranted) {
+      // Check if granted transaction then update latest transaction.
+      if (useGrant) {
+        // Update spendLimit
+        spendLimit = spendLimit.subtract(coinbaseWeiDelta);
+        feeGrant.setStorageValue(
+            rootStorageSlot.add(2L), UInt256.fromHexString(spendLimit.toHexString()));
+
         if (isPeriodic) {
           if (latestTransaction.add(period).compareTo(periodReset) < 0) {
             periodCanSpend = periodLimit.subtract(coinbaseWeiDelta);
