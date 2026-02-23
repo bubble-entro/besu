@@ -172,6 +172,9 @@ public class GasFeeGrantPrecompiledContract extends AbstractPrecompiledContract 
   }
 
   private Bytes isGrantedForAllProgram(final MutableAccount contract, final Bytes calldata) {
+    if (calldata.size() < 32) {
+      return FALSE;
+    }
     final Address granteeAddress = Address.wrap(calldata.slice(12, 20));
     final UInt256 rootSlot = storageSlotGrant(granteeAddress, Address.ZERO);
     if (contract.getStorageValue(rootSlot.add(1L)).isZero()) {
@@ -312,6 +315,9 @@ public class GasFeeGrantPrecompiledContract extends AbstractPrecompiledContract 
   @SuppressWarnings("UnusedVariable")
   private Bytes periodCanSpend(
       final MutableAccount contract, final Bytes calldata, final UInt256 blockNumber) {
+    if (calldata.size() < 64) {
+      return FALSE;
+    }
     final Address granteeAddress = Address.wrap(calldata.slice(12, 20));
     Address programAddress = Address.wrap(calldata.slice(44, 20));
     UInt256 rootSlot = storageSlotGrant(granteeAddress, Address.ZERO);
@@ -335,6 +341,9 @@ public class GasFeeGrantPrecompiledContract extends AbstractPrecompiledContract 
 
   private Bytes periodReset(
       final MutableAccount contract, final Bytes calldata, final UInt256 blockNumber) {
+    if (calldata.size() < 64) {
+      return FALSE;
+    }
     final Address granteeAddress = Address.wrap(calldata.slice(12, 20));
     Address programAddress = Address.wrap(calldata.slice(44, 20));
     UInt256 rootSlot = storageSlotGrant(granteeAddress, Address.ZERO);
