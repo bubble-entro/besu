@@ -282,6 +282,9 @@ public class GasFeeGrantPrecompiledContract extends AbstractPrecompiledContract 
       final Address senderAddress,
       final WorldUpdater worldUpdater,
       final Bytes calldata) {
+    if (calldata == null || calldata.size() < 64) {
+      return FALSE;
+    }
     if (onlyOwner(contract, senderAddress).isZero()) {
       return FALSE;
     } else {

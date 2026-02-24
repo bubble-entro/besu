@@ -52,6 +52,50 @@ Tests 6 unprotected read-only GasFeeGrant functions via `eth_call` with 4-byte p
 
 ---
 
+## Fixes Implemented (Core Stability)
+
+### Besu Critical Node Crash (System Critical)
+- **Issue:** When a Fee Grant limit is exhausted (e.g. `spendLimit` reached), the system falls back to charging the **Sender**. If the Sender has insufficient funds, `decrementBalance` throws an `IllegalStateException`, crashing the node.
+- **Fix:** Modified `MainnetTransactionProcessor.java` to explicitly check the sender's balance before attempting to deduct fees when falling back.
+
+### Consensus Crash (State Divergence)
+- **Issue:** Running the node with updated logic (decrementing `spendLimit`) on top of old chain data caused **State Divergence**, crashing the QBFT Consensus Engine with `Failed validator smart contract call`.
+- **Fix:** **Mandatory chain reset** (`docker-compose down -v`) required when upgrading precompile logic.
+
+### Precompile ABI Mismatch (Out of Gas)
+- **Issue:** `setFeeGrant` reverted due to ABI mismatch (`uint32` vs `uint256`).
+- **Fix:** Updated benchmark scripts' ABI to use `uint32 period`.
+
+---
+
+## Fixes Implemented (Logic & Security)
+
+### Revocation Counter Mismatch (Critical)
+- **Issue:** `setFeeGrant` incremented a global counter, while `revokeFeeGrant` decremented a per-grantee counter.
+- **Fix:** Updated `GasFeeGrantPrecompiledContract.java` to use consistent per-grantee counters.
+
+### Unlimited Spending (High)
+- **Issue:** `spendLimit` was checked but **never decremented**.
+- **Fix:** Modified `MainnetTransactionProcessor.java` to decrement limits after each grant usage.
+
+### Division by Zero (Medium)
+- **Issue:** `periodReset` could divide by zero when `period == 0`.
+- **Fix:** Added `if (period.isZero()) return resetBlock;` guard in `GasFeeGrantPrecompiledContract.java`.
+
+---
+
+## Verification Results
+
+| Test | Scenario | Result | Notes |
+|---|---|---|---|
+| **Benchmark 10** | Massive Grant Usage | ✅ PASS | Counter throughput verified |
+| 1-4 | Basic Functionality | ✅ PASS | Transfers, Calls, Grants, Revokes |
+| 6 | Spend Limit | ✅ PASS | Transactions rejected when limit hit |
+| 7 | Poor Granter | ✅ PASS | Transactions rejected if Granter empty |
+| **Crash Test** | 6 functions × 4-byte payload | ✅ 6/6 Patched | `IndexOutOfBoundsException` eliminated |
+
+---
+
 ## Risk Metric Overview
 
 | ID | Contract | Vulnerability | Impact | Likelihood | Severity |
