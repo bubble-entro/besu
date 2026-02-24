@@ -336,15 +336,14 @@ public class NativeMinterPrecompiledContractTest {
   // ================================================================
 
   @Test
-  public void testMintShortCalldataCrash() {
+  public void testMintShortCalldataReturnsFalse() {
     when(precompileAccount.getStorageValue(OWNER_SLOT))
         .thenReturn(UInt256.fromBytes(padAddress(SENDER_ADDRESS)));
 
     // Only send the selector + partial address (not enough for slice(12,20) + slice(32))
     Bytes shortCalldata = Bytes.concatenate(MINT_SIGNATURE, Bytes.of(0x01));
 
-    org.junit.jupiter.api.Assertions.assertThrows(Exception.class, () -> {
-      contract.computePrecompile(shortCalldata, frame);
-    }, "Expected IndexOutOfBoundsException because calldata length is not validated before slicing.");
+    var result = contract.computePrecompile(shortCalldata, frame);
+    assertThat(result.output()).isEqualTo(FALSE);
   }
 }

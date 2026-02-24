@@ -100,32 +100,43 @@ Tests 6 unprotected read-only GasFeeGrant functions via `eth_call` with 4-byte p
 
 | ID | Contract | Vulnerability | Impact | Likelihood | Severity |
 |:---|:---------|:-------------|:-------|:-----------|:---------|
-| **RISK-01** | GasFeeGrant | Unchecked `.slice()` — Node DoS | High | High | **CRITICAL (9.5)** |
-| **RISK-02** | GasFeeGrant | UInt256 underflow in `periodReset` | High | Med | **HIGH (7.5)** |
-| **RISK-03** | GasFeeGrant | `spendLimit > periodLimit` bypass | Med | Low | **MEDIUM (4.0)** |
-| **RISK-04** | GasFeeGrant | Zero address accepted | Low | Low | **LOW (2.0)** |
-| **RISK-05** | NativeMinter | Unchecked `.slice()` in `mint` — Node DoS | High | Med | **HIGH (7.0)** |
+| **RISK-01** | All 6 precompiles | Universal `<4 bytes` Node Crash | High | High | **CRITICAL (10.0)** |
+| **RISK-02** | AddrReg, Minter, ratio | Missing function bounds verify | High | Med/High | **HIGH (8.5)** |
+| **RISK-03** | GasFeeGrant | UInt256 underflow in `periodReset` | High | Med | **HIGH (7.5)** |
+| **RISK-04** | GasFeeGrant | `spendLimit > periodLimit` bypass | Med | Low | **MEDIUM (4.0)** |
+| **RISK-05** | GasFeeGrant | Zero address accepted | Low | Low | **LOW (2.0)** |
 
 ---
 
-## RISK-01: IndexOutOfBoundsException on Short Calldata (GasFeeGrant)
-**Severity:** CRITICAL  
-**Affected functions:** `isGrantedForProgram`, `grant`, `isGrantedForAllProgram`, `periodCanSpend`, `periodReset`, `setFeeGrant`  
-**Access control:** None on read-only functions → **anyone can trigger**
+## RISK-01: Universal `< 4 Bytes` Calldata Node Crash (All Custom Precompiles)
+**Severity:** CRITICAL (10.0)  
+**Affected Precompiles:** `GasFeeGrant`, `AddressRegistry`, `NativeMinter`, `GasPrice`, `RevenueRatio`, `TreasuryRegistry`  
+**Access control:** None — **anyone can trigger**
 
-Short calldata causes `calldata.slice(12, 20)` to throw unchecked `IndexOutOfBoundsException`, crashing the EVM worker thread.
+Sending a transaction to any custom precompile with 0, 1, 2, or 3 bytes of calldata causes `input.slice(0, 4)` to throw an unchecked `IndexOutOfBoundsException` in both `gasRequirement` and `computePrecompile`. This bypasses EVM error handling and crashes the node immediately.
 
-**Fix applied:** Added `calldata.size() < N` guard at the top of each function:
-- `isGrantedForProgram`: ≥ 64 bytes
-- `grant`: ≥ 64 bytes
-- `isGrantedForAllProgram`: ≥ 32 bytes
-- `periodCanSpend`: ≥ 64 bytes
-- `periodReset`: ≥ 64 bytes
-- `setFeeGrant`: ≥ 224 bytes
+**Fix Applied:** Added the following guard to the top of `gasRequirement` and `computePrecompile` across all 6 precompiles:
+```java
+if (input.size() < 4) { return 0; /* or halt */ }
+```
 
 ---
 
-## RISK-02: UInt256 Underflow in `periodReset`
+## RISK-02: Missing Function Parameter Bounds Verification
+**Severity:** HIGH (7.5 - 9.0)  
+**Affected Precompiles:** `AddressRegistry`, `NativeMinter`, `RevenueRatio`, `GasFeeGrant`
+
+Various functions sliced `calldata` parameter chunks without checking if the payload was long enough.
+- `GasFeeGrant` (All functions): Fixed previously.
+- `AddressRegistry` (`contains`, `discovery`): Publicly accessible. Critical.
+- `NativeMinter` (`mint`): Owner only.
+- `RevenueRatio` (`setRevenueRatio`): Owner only.
+
+**Fix Applied:** Added `if (calldata.size() < N) return FALSE;` explicitly to all aforementioned functions matching their respective required byte schemas.
+
+---
+
+## RISK-03: UInt256 Underflow in `periodReset` (GasFeeGrant)
 **Severity:** HIGH  
 **Impact:** Returns astronomically large reset block, permanently locking the grant period.
 
@@ -153,29 +164,13 @@ if (spendLimit.compareTo(periodLimit) > 0) {
 
 ---
 
-## RISK-04: Zero Address Granter/Grantee
+## RISK-05: Zero Address Granter/Grantee
 **Severity:** LOW  
 **Impact:** Semantically invalid grants that clutter state.
 
 **Fix applied:**
 ```java
 if (granterAddress.isZero() || granteeAddress.isZero()) {
-    return FALSE;
-}
-```
-
----
-
-## RISK-05: IndexOutOfBoundsException in NativeMinter `mint`
-**Severity:** HIGH  
-**Affected function:** `mint(address,uint256)`  
-**Access control:** `onlyOwner` check runs first → **only owner can trigger**
-
-Short calldata to `mint` causes `calldata.slice(12, 20)` to throw. Since `onlyOwner` is checked before slicing, only the contract owner can trigger this crash path.
-
-**Fix needed:** Add bound check:
-```java
-if (calldata.size() < 64) {
     return FALSE;
 }
 ```

@@ -170,6 +170,9 @@ public class GasPricePrecompiledContract extends AbstractPrecompiledContract {
 
   @Override
   public long gasRequirement(final Bytes input) {
+    if (input.size() < 4) {
+      return 0;
+    }
     final Bytes function = input.slice(0, 4);
     if (function.equals(OWNER_SIGNATURE)
         || function.equals(INITIALIZED_SIGNATURE)
@@ -187,7 +190,7 @@ public class GasPricePrecompiledContract extends AbstractPrecompiledContract {
   @Override
   public PrecompileContractResult computePrecompile(
       final Bytes input, @Nonnull final MessageFrame messageFrame) {
-    if (input.isEmpty()) {
+    if (input.size() < 4) {
       return PrecompileContractResult.halt(
           null, Optional.of(ExceptionalHaltReason.PRECOMPILE_ERROR));
     } else {

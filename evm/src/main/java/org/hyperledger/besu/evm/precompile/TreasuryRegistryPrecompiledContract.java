@@ -141,6 +141,9 @@ public class TreasuryRegistryPrecompiledContract extends AbstractPrecompiledCont
 
   @Override
   public long gasRequirement(final Bytes input) {
+    if (input.size() < 4) {
+      return 0;
+    }
     final Bytes function = input.slice(0, 4);
     if (function.equals(INITIALIZE_OWNER_SIGNATURE)
         || function.equals(TRANSFER_OWNERSHIP_SIGNATURE)
@@ -157,7 +160,7 @@ public class TreasuryRegistryPrecompiledContract extends AbstractPrecompiledCont
   @Override
   public PrecompileContractResult computePrecompile(
       final Bytes input, @Nonnull final MessageFrame messageFrame) {
-    if (input.isEmpty()) {
+    if (input.size() < 4) {
       return PrecompileContractResult.halt(
           null, Optional.of(ExceptionalHaltReason.PRECOMPILE_ERROR));
     } else {

@@ -136,6 +136,9 @@ public class AddressRegistryPrecompiledContract extends AbstractPrecompiledContr
   }
 
   private Bytes contains(final MutableAccount contract, final Bytes calldata) {
+    if (calldata.size() < 32) {
+      return FALSE;
+    }
     final Address address = Address.wrap(calldata.slice(12, 20));
     final UInt256 slot = storageSlot(address);
     if (contract.getStorageValue(slot).isZero()) {
@@ -146,12 +149,18 @@ public class AddressRegistryPrecompiledContract extends AbstractPrecompiledContr
   }
 
   private Bytes discovery(final MutableAccount contract, final Bytes calldata) {
+    if (calldata.size() < 32) {
+      return FALSE;
+    }
     final UInt256 slot = storageSlot(Address.wrap(calldata.slice(12, 20)));
     return contract.getStorageValue(slot);
   }
 
   private Bytes addToRegistry(
       final MutableAccount contract, final Address senderAddress, final Bytes calldata) {
+    if (calldata.size() < 64) {
+      return FALSE;
+    }
     if (onlyOwner(contract, senderAddress).isZero()) {
       return FALSE;
     } else {
@@ -169,6 +178,9 @@ public class AddressRegistryPrecompiledContract extends AbstractPrecompiledContr
 
   private Bytes removeFromRegistry(
       final MutableAccount contract, final Address senderAddress, final Bytes calldata) {
+    if (calldata.size() < 32) {
+      return FALSE;
+    }
     if (onlyOwner(contract, senderAddress).isZero()) {
       return FALSE;
     } else {
@@ -183,6 +195,9 @@ public class AddressRegistryPrecompiledContract extends AbstractPrecompiledContr
 
   @Override
   public long gasRequirement(final Bytes input) {
+    if (input.size() < 4) {
+      return 0;
+    }
     final Bytes function = input.slice(0, 4);
     if (function.equals(OWNER_SIGNATURE)
         || function.equals(INITIALIZED_SIGNATURE)
@@ -200,7 +215,7 @@ public class AddressRegistryPrecompiledContract extends AbstractPrecompiledContr
   @Override
   public PrecompileContractResult computePrecompile(
       final Bytes input, @Nonnull final MessageFrame messageFrame) {
-    if (input.isEmpty()) {
+    if (input.size() < 4) {
       return PrecompileContractResult.halt(
           null, Optional.of(ExceptionalHaltReason.PRECOMPILE_ERROR));
     } else {

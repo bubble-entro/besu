@@ -184,6 +184,9 @@ public class RevenueRatioPrecompiledContract extends AbstractPrecompiledContract
 
   private Bytes setRevenueRatio(
       final MutableAccount contract, final Address senderAddress, final Bytes calldata) {
+    if (calldata.size() < 128) {
+      return FALSE;
+    }
     if (onlyOwner(contract, senderAddress).isZero()) {
       return FALSE;
     } else {
@@ -211,6 +214,9 @@ public class RevenueRatioPrecompiledContract extends AbstractPrecompiledContract
 
   @Override
   public long gasRequirement(final Bytes input) {
+    if (input.size() < 4) {
+      return 0;
+    }
     final Bytes function = input.slice(0, 4);
     if (function.equals(OWNER_SIGNATURE)
         || function.equals(INITIALIZED_SIGNATURE)
@@ -230,7 +236,7 @@ public class RevenueRatioPrecompiledContract extends AbstractPrecompiledContract
   @Override
   public PrecompileContractResult computePrecompile(
       final Bytes input, @Nonnull final MessageFrame messageFrame) {
-    if (input.isEmpty()) {
+    if (input.size() < 4) {
       return PrecompileContractResult.halt(
           null, Optional.of(ExceptionalHaltReason.PRECOMPILE_ERROR));
     } else {
