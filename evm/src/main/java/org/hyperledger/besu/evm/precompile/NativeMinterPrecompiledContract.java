@@ -33,8 +33,20 @@ import org.apache.tuweni.units.bigints.UInt256;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * NativeMinter Precompiled Contract.
+ *
+ * <p>Changes from Original:
+ * <ul>
+ *   <li>Added totalSupply tracking (TOTALSUPPLY_SLOT at slot 2), incremented on each mint</li>
+ *   <li>Added totalsupply() getter</li>
+ *   <li>Explicit calldata.slice(32, 32) in mint instead of calldata.slice(32)</li>
+ *   <li>Added calldata bounds checks on initializeOwner, transferOwnership</li>
+ * </ul>
+ */
 public class NativeMinterPrecompiledContract extends AbstractPrecompiledContract {
-  private static final Logger LOG = LoggerFactory.getLogger(NativeMinterPrecompiledContract.class);
+  private static final Logger LOG =
+      LoggerFactory.getLogger(NativeMinterPrecompiledContract.class);
 
   /** Ownable */
   private static final Bytes OWNER_SIGNATURE =
@@ -43,9 +55,11 @@ public class NativeMinterPrecompiledContract extends AbstractPrecompiledContract
   private static final Bytes INITIALIZED_SIGNATURE =
       Hash.keccak256(Bytes.of("initialized()".getBytes(UTF_8))).slice(0, 4);
   private static final Bytes INITIALIZE_OWNER_SIGNATURE =
-      Hash.keccak256(Bytes.of("initializeOwner(address)".getBytes(UTF_8))).slice(0, 4);
+    Hash.keccak256(Bytes.of("initializeOwner(address)".getBytes(UTF_8))).slice(0, 4);
   private static final Bytes TRANSFER_OWNERSHIP_SIGNATURE =
       Hash.keccak256(Bytes.of("transferOwnership(address)".getBytes(UTF_8))).slice(0, 4);
+  private static final Bytes TOTALSUPPLY_SIGNATURE =
+      Hash.keccak256(Bytes.of("totalsupply()".getBytes(UTF_8))).slice(0, 4);
 
   /** NativeMinter */
   private static final Bytes MINT_SIGNATURE =
@@ -55,6 +69,8 @@ public class NativeMinterPrecompiledContract extends AbstractPrecompiledContract
   private static final UInt256 INIT_SLOT = UInt256.ZERO;
 
   private static final UInt256 OWNER_SLOT = UInt256.ONE;
+
+  private static final UInt256 TOTALSUPPLY_SLOT = UInt256.valueOf(2L);
 
   /** Returns */
   private static final Bytes FALSE =
@@ -85,29 +101,38 @@ public class NativeMinterPrecompiledContract extends AbstractPrecompiledContract
     return contract.getStorageValue(INIT_SLOT);
   }
 
+  private Bytes totalsupply(final MutableAccount contract) {
+    return contract.getStorageValue(TOTALSUPPLY_SLOT);
+  }
+
   private Bytes initializeOwner(final MutableAccount contract, final Bytes calldata) {
+    if (calldata.size() < 32) {
+      return FALSE;
+    }
     if (initialized(contract).equals(TRUE)) {
       return FALSE;
-    } else {
-      final UInt256 initialOwner = UInt256.fromBytes(calldata);
-      if (initialOwner.isZero()) {
-        return FALSE;
-      }
-      if (contract.getNonce() == 0L) {
-        contract.incrementNonce();
-      }
-      contract.setStorageValue(OWNER_SLOT, initialOwner);
-      contract.setStorageValue(INIT_SLOT, UInt256.ONE);
-      return TRUE;
     }
+    final UInt256 initialOwner = UInt256.fromBytes(calldata.slice(0, 32));
+    if (initialOwner.isZero()) {
+      return FALSE;
+    }
+    if (contract.getNonce() == 0L) {
+      contract.incrementNonce();
+    }
+    contract.setStorageValue(OWNER_SLOT, initialOwner);
+    contract.setStorageValue(INIT_SLOT, UInt256.ONE);
+    return TRUE;
   }
 
   private Bytes transferOwnership(
       final MutableAccount contract, final Address senderAddress, final Bytes calldata) {
+    if (calldata.size() < 32) {
+      return FALSE;
+    }
     if (onlyOwner(contract, senderAddress).isZero()) {
       return FALSE;
     } else {
-      final UInt256 newOwner = UInt256.fromBytes(calldata);
+      final UInt256 newOwner = UInt256.fromBytes(calldata.slice(0, 32));
       if (newOwner.isZero()) {
         return FALSE;
       }
@@ -126,25 +151,37 @@ public class NativeMinterPrecompiledContract extends AbstractPrecompiledContract
     }
     if (onlyOwner(contract, senderAddress).isZero()) {
       return FALSE;
-    } else {
-      final Address recipientAddress = Address.wrap(calldata.slice(12, 20));
-      final UInt256 value = UInt256.fromBytes(calldata.slice(32));
-      if (value.isZero() || recipientAddress.equals(Address.ZERO)) {
-        return FALSE;
-      }
-      final MutableAccount recipientAccount = worldUpdater.getOrCreate(recipientAddress);
-      recipientAccount.incrementBalance(Wei.of(value));
-      return TRUE;
     }
+
+    final Address recipientAddress = Address.wrap(calldata.slice(12, 20));
+    final UInt256 value = UInt256.fromBytes(calldata.slice(32, 32));
+
+    if (value.isZero() || recipientAddress.equals(Address.ZERO)) {
+      return FALSE;
+    }
+
+    final MutableAccount recipientAccount = worldUpdater.getOrCreate(recipientAddress);
+    final Wei weiValue = Wei.of(value);
+
+    recipientAccount.incrementBalance(weiValue);
+
+    // Track total supply
+    final Wei previousSupply = Wei.of(contract.getStorageValue(TOTALSUPPLY_SLOT));
+    final Wei currentSupply = previousSupply.add(weiValue);
+    contract.setStorageValue(TOTALSUPPLY_SLOT, UInt256.fromBytes(currentSupply.toBytes()));
+
+    return TRUE;
   }
 
   @Override
   public long gasRequirement(final Bytes input) {
     if (input.size() < 4) {
-      return 0;
+      return 2000;
     }
     final Bytes function = input.slice(0, 4);
-    if (function.equals(OWNER_SIGNATURE) || function.equals(INITIALIZED_SIGNATURE)) {
+    if (function.equals(OWNER_SIGNATURE)
+        || function.equals(INITIALIZED_SIGNATURE)
+        || function.equals(TOTALSUPPLY_SIGNATURE)) {
       return 1000;
     } else {
       return 2000;
@@ -170,10 +207,13 @@ public class NativeMinterPrecompiledContract extends AbstractPrecompiledContract
       } else if (function.equals(INITIALIZED_SIGNATURE)) {
         return PrecompileContractResult.success(initialized(precompile));
       } else if (function.equals(INITIALIZE_OWNER_SIGNATURE) && !isStaticCall) {
-        return PrecompileContractResult.success(initializeOwner(precompile, calldata));
+        return PrecompileContractResult.success(
+            initializeOwner(precompile, calldata));
       } else if (function.equals(TRANSFER_OWNERSHIP_SIGNATURE) && !isStaticCall) {
         return PrecompileContractResult.success(
             transferOwnership(precompile, senderAddress, calldata));
+      } else if (function.equals(TOTALSUPPLY_SIGNATURE)) {
+        return PrecompileContractResult.success(totalsupply(precompile));
       } else if (function.equals(MINT_SIGNATURE) && !isStaticCall) {
         return PrecompileContractResult.success(
             mint(precompile, worldUpdater, senderAddress, calldata));

@@ -33,6 +33,17 @@ import org.apache.tuweni.units.bigints.UInt256;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * AddressRegistry Precompiled Contract .
+ *
+ * <p>Changes from V1:
+ * <ul>
+ *   <li>EVM-compatible storage hashing: uses Bytes32.wrap + Bytes32.leftPad (matches Solidity mapping slots)</li>
+ *   <li>Keeps Address param type for type safety</li>
+ *   <li>Added calldata bounds checks on initializeOwner, transferOwnership</li>
+ *   <li>Retains all existing bounds checks from V1</li>
+ * </ul>
+ */
 public class AddressRegistryPrecompiledContract extends AbstractPrecompiledContract {
   private static final Logger LOG =
       LoggerFactory.getLogger(AddressRegistryPrecompiledContract.class);
@@ -57,10 +68,9 @@ public class AddressRegistryPrecompiledContract extends AbstractPrecompiledContr
 
   private static final Bytes ADD_TO_REGISTRY_SIGNATURE =
       Hash.keccak256(Bytes.of("addToRegistry(address,address)".getBytes(UTF_8))).slice(0, 4);
-  ;
+
   private static final Bytes REMOVE_FROM_REGISTRY_SIGNATURE =
       Hash.keccak256(Bytes.of("removeFromRegistry(address)".getBytes(UTF_8))).slice(0, 4);
-  ;
 
   /** Storage Layout */
   private static final UInt256 INIT_SLOT = UInt256.ZERO;
@@ -90,10 +100,17 @@ public class AddressRegistryPrecompiledContract extends AbstractPrecompiledContr
     }
   }
 
-  // for calculate storage slot of mapping(address => bool)
+  /**
+   * EVM-compatible storage slot calculation for mapping(address => value).
+   * Uses Bytes32.wrap + Bytes32.leftPad to match Solidity's mapping slot computation.
+   *
+   * @param address the address key (type-safe Address param)
+   * @return the computed storage slot
+   */
   private UInt256 storageSlot(final Address address) {
-    final Bytes slotKey = Bytes.concatenate(REGISTRY_SLOT, address.getBytes());
-    return UInt256.fromBytes(Bytes32.leftPad(Hash.keccak256(slotKey)));
+    final Bytes slotKey =
+        Bytes.concatenate(Bytes32.wrap(REGISTRY_SLOT), Bytes32.leftPad(address.getBytes()));
+    return UInt256.fromBytes(Hash.keccak256(slotKey));
   }
 
   private Bytes owner(final MutableAccount contract) {
@@ -105,10 +122,13 @@ public class AddressRegistryPrecompiledContract extends AbstractPrecompiledContr
   }
 
   private Bytes initializeOwner(final MutableAccount contract, final Bytes calldata) {
+    if (calldata.size() < 32) {
+      return FALSE;
+    }
     if (initialized(contract).equals(TRUE)) {
       return FALSE;
     } else {
-      final UInt256 initialOwner = UInt256.fromBytes(calldata);
+      final UInt256 initialOwner = UInt256.fromBytes(calldata.slice(0, 32));
       if (initialOwner.isZero()) {
         return FALSE;
       }
@@ -123,10 +143,13 @@ public class AddressRegistryPrecompiledContract extends AbstractPrecompiledContr
 
   private Bytes transferOwnership(
       final MutableAccount contract, final Address senderAddress, final Bytes calldata) {
+    if (calldata.size() < 32) {
+      return FALSE;
+    }
     if (onlyOwner(contract, senderAddress).isZero()) {
       return FALSE;
     } else {
-      final UInt256 newOwner = UInt256.fromBytes(calldata);
+      final UInt256 newOwner = UInt256.fromBytes(calldata.slice(0, 32));
       if (newOwner.isZero()) {
         return FALSE;
       }
@@ -171,7 +194,7 @@ public class AddressRegistryPrecompiledContract extends AbstractPrecompiledContr
         return FALSE;
       }
       final UInt256 slot = storageSlot(toAddAddress);
-      contract.setStorageValue(slot, UInt256.fromBytes(calldata.slice(32)));
+      contract.setStorageValue(slot, UInt256.fromBytes(calldata.slice(32, 32)));
       return TRUE;
     }
   }

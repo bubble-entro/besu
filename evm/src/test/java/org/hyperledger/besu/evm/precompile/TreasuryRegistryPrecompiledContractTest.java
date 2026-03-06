@@ -3,13 +3,11 @@ package org.hyperledger.besu.evm.precompile;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import org.hyperledger.besu.crypto.Hash;
 import org.hyperledger.besu.datatypes.Address;
-import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
@@ -24,13 +22,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
-public class NativeMinterPrecompiledContractTest {
+public class TreasuryRegistryPrecompiledContractTest {
 
-  private NativeMinterPrecompiledContract contract;
+  private TreasuryRegistryPrecompiledContract contract;
   private MessageFrame frame;
   private WorldUpdater worldUpdater;
   private MutableAccount precompileAccount;
-  private MutableAccount recipientAccount;
 
   private static final Bytes OWNER_SIG =
       Hash.keccak256(Bytes.of("owner()".getBytes(UTF_8))).slice(0, 4);
@@ -38,14 +35,14 @@ public class NativeMinterPrecompiledContractTest {
       Hash.keccak256(Bytes.of("initializeOwner(address)".getBytes(UTF_8))).slice(0, 4);
   private static final Bytes TRANSFER_SIG =
       Hash.keccak256(Bytes.of("transferOwnership(address)".getBytes(UTF_8))).slice(0, 4);
-  private static final Bytes TOTALSUPPLY_SIG =
-      Hash.keccak256(Bytes.of("totalsupply()".getBytes(UTF_8))).slice(0, 4);
-  private static final Bytes MINT_SIG =
-      Hash.keccak256(Bytes.of("mint(address,uint256)".getBytes(UTF_8))).slice(0, 4);
+  private static final Bytes TREASURY_AT_SIG =
+      Hash.keccak256(Bytes.of("treasuryAt()".getBytes(UTF_8))).slice(0, 4);
+  private static final Bytes SET_TREASURY_SIG =
+      Hash.keccak256(Bytes.of("setTreasury(address)".getBytes(UTF_8))).slice(0, 4);
 
   private static final UInt256 INIT_SLOT = UInt256.ZERO;
   private static final UInt256 OWNER_SLOT = UInt256.ONE;
-  private static final UInt256 TOTALSUPPLY_SLOT = UInt256.valueOf(2L);
+  private static final UInt256 TREASURY_SLOT = UInt256.valueOf(2L);
 
   private static final Bytes FALSE = Bytes.fromHexString(
       "0x0000000000000000000000000000000000000000000000000000000000000000");
@@ -54,23 +51,21 @@ public class NativeMinterPrecompiledContractTest {
 
   private static final Address SENDER =
       Address.fromHexString("0x1111111111111111111111111111111111111111");
-  private static final Address RECIPIENT =
+  private static final Address TREASURY =
       Address.fromHexString("0x3333333333333333333333333333333333333333");
 
   private static Bytes32 pad(final Address a) { return Bytes32.leftPad(a.getBytes()); }
 
   @BeforeEach
   void setup() {
-    contract = new NativeMinterPrecompiledContract(new FrontierGasCalculator());
+    contract = new TreasuryRegistryPrecompiledContract(new FrontierGasCalculator());
     frame = Mockito.mock(MessageFrame.class);
     worldUpdater = Mockito.mock(WorldUpdater.class);
     precompileAccount = Mockito.mock(MutableAccount.class);
-    recipientAccount = Mockito.mock(MutableAccount.class);
     when(frame.getWorldUpdater()).thenReturn(worldUpdater);
     when(frame.getSenderAddress()).thenReturn(SENDER);
     when(frame.isStatic()).thenReturn(false);
-    when(worldUpdater.getOrCreate(Address.NATIVE_MINTER)).thenReturn(precompileAccount);
-    when(worldUpdater.getOrCreate(RECIPIENT)).thenReturn(recipientAccount);
+    when(worldUpdater.getOrCreate(Address.TREASURY_REGISTRY)).thenReturn(precompileAccount);
     when(precompileAccount.getStorageValue(any(UInt256.class))).thenReturn(UInt256.ZERO);
     when(precompileAccount.getNonce()).thenReturn(0L);
   }
@@ -80,103 +75,65 @@ public class NativeMinterPrecompiledContractTest {
     assertThat(r.getHaltReason()).isEqualTo(Optional.of(ExceptionalHaltReason.PRECOMPILE_ERROR));
   }
   @Test void testShortInputHalts() {
-    var r = contract.computePrecompile(Bytes.of(0x01, 0x02), frame);
+    var r = contract.computePrecompile(Bytes.of(0x01), frame);
     assertThat(r.getHaltReason()).isEqualTo(Optional.of(ExceptionalHaltReason.PRECOMPILE_ERROR));
   }
 
-  // ---- initializeOwner ----
   @Test void testInitOwnerSuccess() {
-    var r = contract.computePrecompile(
-        Bytes.concatenate(INIT_OWNER_SIG, pad(SENDER)), frame);
+    var r = contract.computePrecompile(Bytes.concatenate(INIT_OWNER_SIG, pad(SENDER)), frame);
     assertThat(r.output()).isEqualTo(TRUE);
     verify(precompileAccount).setStorageValue(OWNER_SLOT, UInt256.fromBytes(pad(SENDER)));
-    verify(precompileAccount).setStorageValue(INIT_SLOT, UInt256.ONE);
   }
   @Test void testInitOwnerShortCalldata() {
-    // Only 16 bytes instead of 32
-    var r = contract.computePrecompile(
-        Bytes.concatenate(INIT_OWNER_SIG, Bytes.of(0x01)), frame);
+    var r = contract.computePrecompile(Bytes.concatenate(INIT_OWNER_SIG, Bytes.of(0x01)), frame);
     assertThat(r.output()).isEqualTo(FALSE);
   }
-  @Test void testInitOwnerZeroOwner() {
-    var r = contract.computePrecompile(
-        Bytes.concatenate(INIT_OWNER_SIG, pad(Address.ZERO)), frame);
-    assertThat(r.output()).isEqualTo(FALSE);
-  }
-  @Test void testInitOwnerFailsAlreadyInit() {
+  @Test void testInitOwnerAlreadyInit() {
     when(precompileAccount.getStorageValue(INIT_SLOT)).thenReturn(UInt256.fromBytes(TRUE));
-    var r = contract.computePrecompile(
-        Bytes.concatenate(INIT_OWNER_SIG, pad(SENDER)), frame);
+    var r = contract.computePrecompile(Bytes.concatenate(INIT_OWNER_SIG, pad(SENDER)), frame);
     assertThat(r.output()).isEqualTo(FALSE);
   }
 
-  // ---- totalsupply (V2 new getter) ----
-  @Test void testTotalSupplyReturnsStored() {
-    when(precompileAccount.getStorageValue(TOTALSUPPLY_SLOT)).thenReturn(UInt256.valueOf(5000));
-    var r = contract.computePrecompile(TOTALSUPPLY_SIG, frame);
-    assertThat(r.output()).isEqualTo(UInt256.valueOf(5000));
-  }
-
-  // ---- transferOwnership ----
   @Test void testTransferShortCalldata() {
     when(precompileAccount.getStorageValue(OWNER_SLOT)).thenReturn(UInt256.fromBytes(pad(SENDER)));
     var r = contract.computePrecompile(Bytes.concatenate(TRANSFER_SIG, Bytes.of(0x01)), frame);
     assertThat(r.output()).isEqualTo(FALSE);
   }
 
-  // ---- mint with totalSupply tracking ----
-  @Test void testMintSuccess() {
+  @Test void testSetTreasurySuccess() {
     when(precompileAccount.getStorageValue(OWNER_SLOT)).thenReturn(UInt256.fromBytes(pad(SENDER)));
-    UInt256 amount = UInt256.valueOf(1000L);
-    var r = contract.computePrecompile(
-        Bytes.concatenate(MINT_SIG, pad(RECIPIENT), amount), frame);
+    var r = contract.computePrecompile(Bytes.concatenate(SET_TREASURY_SIG, pad(TREASURY)), frame);
     assertThat(r.output()).isEqualTo(TRUE);
-    verify(recipientAccount).incrementBalance(Wei.of(amount));
-    // Verify totalSupply updated
-    verify(precompileAccount).setStorageValue(
-        TOTALSUPPLY_SLOT, UInt256.fromBytes(Wei.of(amount).toBytes()));
+    verify(precompileAccount).setStorageValue(TREASURY_SLOT, UInt256.fromBytes(pad(TREASURY)));
   }
-  @Test void testMintShortCalldata() {
+  @Test void testSetTreasuryShortCalldata() {
     when(precompileAccount.getStorageValue(OWNER_SLOT)).thenReturn(UInt256.fromBytes(pad(SENDER)));
-    var r = contract.computePrecompile(Bytes.concatenate(MINT_SIG, Bytes.of(0x01)), frame);
+    var r = contract.computePrecompile(Bytes.concatenate(SET_TREASURY_SIG, Bytes.of(0x01)), frame);
     assertThat(r.output()).isEqualTo(FALSE);
   }
-  @Test void testMintNotOwnerFails() {
-    when(precompileAccount.getStorageValue(OWNER_SLOT)).thenReturn(UInt256.fromBytes(pad(RECIPIENT)));
-    var r = contract.computePrecompile(
-        Bytes.concatenate(MINT_SIG, pad(RECIPIENT), UInt256.valueOf(100)), frame);
-    assertThat(r.output()).isEqualTo(FALSE);
-    verify(recipientAccount, never()).incrementBalance(any(Wei.class));
-  }
-  @Test void testMintZeroAmountFails() {
+  @Test void testSetTreasuryZeroFails() {
     when(precompileAccount.getStorageValue(OWNER_SLOT)).thenReturn(UInt256.fromBytes(pad(SENDER)));
-    var r = contract.computePrecompile(
-        Bytes.concatenate(MINT_SIG, pad(RECIPIENT), UInt256.ZERO), frame);
-    assertThat(r.output()).isEqualTo(FALSE);
-  }
-  @Test void testMintToZeroAddressFails() {
-    when(precompileAccount.getStorageValue(OWNER_SLOT)).thenReturn(UInt256.fromBytes(pad(SENDER)));
-    var r = contract.computePrecompile(
-        Bytes.concatenate(MINT_SIG, pad(Address.ZERO), UInt256.valueOf(100)), frame);
+    var r = contract.computePrecompile(Bytes.concatenate(SET_TREASURY_SIG, pad(Address.ZERO)), frame);
     assertThat(r.output()).isEqualTo(FALSE);
   }
 
-  // ---- gas costs ----
+  @Test void testTreasuryAtReturnsStored() {
+    when(precompileAccount.getStorageValue(TREASURY_SLOT)).thenReturn(UInt256.fromBytes(pad(TREASURY)));
+    var r = contract.computePrecompile(TREASURY_AT_SIG, frame);
+    assertThat(r.output()).isEqualTo(UInt256.fromBytes(pad(TREASURY)));
+  }
+
   @Test void testGasReadCost() {
     assertThat(contract.gasRequirement(OWNER_SIG)).isEqualTo(1000L);
-    assertThat(contract.gasRequirement(TOTALSUPPLY_SIG)).isEqualTo(1000L);
+    assertThat(contract.gasRequirement(TREASURY_AT_SIG)).isEqualTo(1000L);
   }
   @Test void testGasWriteCost() {
-    assertThat(contract.gasRequirement(Bytes.concatenate(MINT_SIG, pad(RECIPIENT), UInt256.ONE))).isEqualTo(2000L);
-  }
-  @Test void testGasShortInput() {
-    assertThat(contract.gasRequirement(Bytes.of(0x01))).isEqualTo(2000L);
+    assertThat(contract.gasRequirement(Bytes.concatenate(SET_TREASURY_SIG, pad(TREASURY)))).isEqualTo(2000L);
   }
 
   @Test void testStaticCallBlocked() {
     when(frame.isStatic()).thenReturn(true);
-    var r = contract.computePrecompile(
-        Bytes.concatenate(INIT_OWNER_SIG, pad(SENDER)), frame);
+    var r = contract.computePrecompile(Bytes.concatenate(SET_TREASURY_SIG, pad(TREASURY)), frame);
     assertThat(r.getHaltReason()).isEqualTo(Optional.of(ExceptionalHaltReason.PRECOMPILE_ERROR));
   }
 

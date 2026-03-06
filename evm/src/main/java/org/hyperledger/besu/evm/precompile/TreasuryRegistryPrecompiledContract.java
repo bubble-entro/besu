@@ -32,6 +32,14 @@ import org.apache.tuweni.units.bigints.UInt256;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * TreasuryRegistry Precompiled Contract .
+ *
+ * <p>Changes from V1:
+ * <ul>
+ *   <li>Added calldata bounds checks on all write functions</li>
+ * </ul>
+ */
 public class TreasuryRegistryPrecompiledContract extends AbstractPrecompiledContract {
   private static final Logger LOG =
       LoggerFactory.getLogger(TreasuryRegistryPrecompiledContract.class);
@@ -91,10 +99,13 @@ public class TreasuryRegistryPrecompiledContract extends AbstractPrecompiledCont
   }
 
   private Bytes initializeOwner(final MutableAccount contract, final Bytes calldata) {
+    if (calldata.size() < 32) {
+      return FALSE;
+    }
     if (initialized(contract).equals(TRUE)) {
       return FALSE;
     } else {
-      final UInt256 initialOwner = UInt256.fromBytes(calldata);
+      final UInt256 initialOwner = UInt256.fromBytes(calldata.slice(0, 32));
       if (initialOwner.isZero()) {
         return FALSE;
       }
@@ -109,10 +120,13 @@ public class TreasuryRegistryPrecompiledContract extends AbstractPrecompiledCont
 
   private Bytes transferOwnership(
       final MutableAccount contract, final Address senderAddress, final Bytes calldata) {
+    if (calldata.size() < 32) {
+      return FALSE;
+    }
     if (onlyOwner(contract, senderAddress).isZero()) {
       return FALSE;
     } else {
-      final UInt256 newOwner = UInt256.fromBytes(calldata);
+      final UInt256 newOwner = UInt256.fromBytes(calldata.slice(0, 32));
       if (newOwner.isZero()) {
         return FALSE;
       }
@@ -127,10 +141,13 @@ public class TreasuryRegistryPrecompiledContract extends AbstractPrecompiledCont
 
   private Bytes setTreasury(
       final MutableAccount contract, final Address senderAddress, final Bytes calldata) {
+    if (calldata.size() < 32) {
+      return FALSE;
+    }
     if (onlyOwner(contract, senderAddress).isZero()) {
       return FALSE;
     } else {
-      final UInt256 newTreasury = UInt256.fromBytes(calldata);
+      final UInt256 newTreasury = UInt256.fromBytes(calldata.slice(0, 32));
       if (newTreasury.isZero()) {
         return FALSE;
       }
@@ -151,7 +168,7 @@ public class TreasuryRegistryPrecompiledContract extends AbstractPrecompiledCont
       // gas cost for write operation.
       return 2000;
     } else {
-      // gas const for read operation.
+      // gas cost for read operation.
       return 1000;
     }
   }

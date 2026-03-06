@@ -32,6 +32,14 @@ import org.apache.tuweni.units.bigints.UInt256;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * GasPrice Precompiled Contract .
+ *
+ * <p>Changes from V1:
+ * <ul>
+ *   <li>Added calldata bounds checks on initializeOwner, transferOwnership, setGasPrice</li>
+ * </ul>
+ */
 public class GasPricePrecompiledContract extends AbstractPrecompiledContract {
   private static final Logger LOG = LoggerFactory.getLogger(GasPricePrecompiledContract.class);
 
@@ -101,10 +109,13 @@ public class GasPricePrecompiledContract extends AbstractPrecompiledContract {
   }
 
   private Bytes initializeOwner(final MutableAccount contract, final Bytes calldata) {
+    if (calldata.size() < 32) {
+      return FALSE;
+    }
     if (initialized(contract).equals(TRUE)) {
       return FALSE;
     } else {
-      final UInt256 initialOwner = UInt256.fromBytes(calldata);
+      final UInt256 initialOwner = UInt256.fromBytes(calldata.slice(0, 32));
       if (initialOwner.isZero()) {
         return FALSE;
       }
@@ -119,10 +130,13 @@ public class GasPricePrecompiledContract extends AbstractPrecompiledContract {
 
   private Bytes transferOwnership(
       final MutableAccount contract, final Address senderAddress, final Bytes calldata) {
+    if (calldata.size() < 32) {
+      return FALSE;
+    }
     if (onlyOwner(contract, senderAddress).isZero()) {
       return FALSE;
     } else {
-      final UInt256 newOwner = UInt256.fromBytes(calldata);
+      final UInt256 newOwner = UInt256.fromBytes(calldata.slice(0, 32));
       if (newOwner.isZero()) {
         return FALSE;
       }
@@ -159,10 +173,13 @@ public class GasPricePrecompiledContract extends AbstractPrecompiledContract {
 
   private Bytes setGasPrice(
       final MutableAccount contract, final Address senderAddress, final Bytes calldata) {
+    if (calldata.size() < 32) {
+      return FALSE;
+    }
     if (onlyOwner(contract, senderAddress).isZero()) {
       return FALSE;
     } else {
-      final UInt256 newGasPrice = UInt256.fromBytes(calldata);
+      final UInt256 newGasPrice = UInt256.fromBytes(calldata.slice(0, 32));
       contract.setStorageValue(GASPRICE_SLOT, newGasPrice);
       return TRUE;
     }
@@ -204,9 +221,9 @@ public class GasPricePrecompiledContract extends AbstractPrecompiledContract {
         return PrecompileContractResult.success(owner(precompile));
       } else if (function.equals(INITIALIZED_SIGNATURE)) {
         return PrecompileContractResult.success(initialized(precompile));
-      } else if (function.equals(INITIALIZE_OWNER_SIGNATURE)  && !isStaticCall) {
+      } else if (function.equals(INITIALIZE_OWNER_SIGNATURE) && !isStaticCall) {
         return PrecompileContractResult.success(initializeOwner(precompile, calldata));
-      } else if (function.equals(TRANSFER_OWNERSHIP_SIGNATURE)  && !isStaticCall) {
+      } else if (function.equals(TRANSFER_OWNERSHIP_SIGNATURE) && !isStaticCall) {
         return PrecompileContractResult.success(
             transferOwnership(precompile, senderAddress, calldata));
       } else if (function.equals(GASPRICE_SIGNATURE)) {

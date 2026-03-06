@@ -248,6 +248,7 @@ public class MainnetTransactionProcessor {
       Address granterAddress = Address.ZERO;
       MutableAccount granter = worldState.getOrCreate(Address.ZERO);
       boolean isPeriodic = false;
+      boolean isWildcard = false;
 
       boolean useGrant = !sender.getStorageValue(FEE_GRANT_FLAG_STORAGE).isZero();
       // && (sender.getBalance()).isZero();
@@ -299,10 +300,27 @@ public class MainnetTransactionProcessor {
                 periodCanSpend = Wei.of(feeGrant.getStorageValue(rootStorageSlot.add(4L)));
               }
               isPeriodic = true;
+            } else if (feeGrant
+                .getStorageValue(rootStorageSlot.add(1L))
+                .equals(UInt256.valueOf(3L))) {
+              // Wildcard grant — no spend/period/expiry checks
+              isWildcard = true;
             }
           }
           if (useGrant) {
             granter = worldState.getOrCreate(granterAddress);
+
+            final Wei MINIMUM_GRANTER_BALANCE = Wei.of(10_000_000_000_000_000L); // 0.01 ETH
+    
+            if (granter.getBalance().compareTo(MINIMUM_GRANTER_BALANCE) < 0) {
+                // granter เงินหมด — clear flag แล้ว fallback
+                LOG.debug("Granter {} balance below minimum, clearing grant flag", granterAddress);
+                
+                final MutableAccount senderAccount = worldState.getOrCreate(senderAddress);
+                senderAccount.setStorageValue(FEE_GRANT_FLAG_STORAGE, UInt256.ZERO);
+        
+                useGrant = false; // fallback to sender transaction
+            }
           }
         } else {
           useGrant = false;
@@ -328,7 +346,7 @@ public class MainnetTransactionProcessor {
       final Wei upfrontGasCost =
           transaction.getUpfrontGasCost(transactionGasPrice, blobGasPrice, blobGas);
 
-      if (useGrant) {
+      if (useGrant && !isWildcard) {
         if (upfrontGasCost.compareTo(granter.getBalance()) > 0
             || upfrontGasCost.compareTo(spendLimit) > 0
             || (isPeriodic && upfrontGasCost.compareTo(periodCanSpend) > 0)) {
@@ -650,7 +668,7 @@ public class MainnetTransactionProcessor {
 
       // Check if granted transaction then update latest transaction.
       // Check if granted transaction then update latest transaction.
-      if (useGrant) {
+      if (useGrant && !isWildcard) {
         // Update spendLimit
         spendLimit = spendLimit.subtract(coinbaseWeiDelta);
         feeGrant.setStorageValue(
@@ -795,8 +813,8 @@ public class MainnetTransactionProcessor {
 
   private Address getProviderOf(final WorldUpdater worldUpdater, final Address address) {
     final MutableAccount addressRegistry = worldUpdater.getOrCreate(Address.ADDRESS_REGISTRY);
-    final Bytes hash = Bytes.concatenate(PRECOMPILE_STORAGE_SLOT, address.getBytes());
-    final UInt256 slot = UInt256.fromBytes(Bytes32.leftPad(keccak256(hash)));
+    final Bytes hash = Bytes.concatenate(Bytes32.wrap(PRECOMPILE_STORAGE_SLOT), Bytes32.leftPad(address.getBytes()));
+    final UInt256 slot = UInt256.fromBytes(keccak256(hash));
     return Address.wrap(addressRegistry.getStorageValue(slot).slice(12, 20));
   }
 
@@ -811,8 +829,8 @@ public class MainnetTransactionProcessor {
   }
 
   private UInt256 getRootSlotOfGasFeeGrant(final Address sender, final Address program) {
-    final Bytes32 root = keccak256(Bytes.concatenate(PRECOMPILE_STORAGE_SLOT, sender.getBytes()));
-    final Bytes32 slot = keccak256(Bytes.concatenate(root, program.getBytes()));
+    final Bytes32 root = keccak256(Bytes.concatenate(PRECOMPILE_STORAGE_SLOT, Bytes32.leftPad(sender.getBytes())));
+    final Bytes32 slot = keccak256(Bytes.concatenate(root, Bytes32.leftPad(program.getBytes())));
     return UInt256.fromBytes(slot);
   }
 
